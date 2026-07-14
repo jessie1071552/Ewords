@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NGSL 英単語練習アプリ</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f7f6; color: #333; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #2c3e50; }
+        .setting-group, .quiz-section, .result-section { margin-bottom: 20px; }
+        label { display: block; margin: 10px 0 5px; font-weight: bold; }
+        select, input, button { width: 100%; padding: 10px; margin-top: 5px; border-radius: 4px; border: 1px solid #ccc; box-sizing: border-box; }
+        button { background-color: #3498db; color: white; border: none; font-size: 16px; cursor: pointer; }
+        button:hover { background-color: #2980b9; }
+        .card { background: #ecf0f1; padding: 20px; border-radius: 6px; text-align: center; font-size: 24px; margin-bottom: 20px; position: relative; }
+        .example { font-size: 16px; color: #555; margin-top: 10px; text-align: left; background: #fff; padding: 10px; border-left: 4px solid #3498db; }
+        .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .option-btn { background-color: #fff; color: #333; border: 2px solid #3498db; }
+        .option-btn:hover { background-color: #e8f4fd; }
+        .audio-btn { background-color: #2ecc71; margin-bottom: 10px; }
+        .audio-btn:hover { background-color: #27ae60; }
+        .hidden { display: none; }
+        .info-text { font-size: 14px; color: #666; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>NGSL 単語練習</h1>
+
+    <!-- 設定画面 -->
+    <div id="setup-screen">
+        <div class="setting-group">
+            <label for="question-count">一回ごとの出題数:</label>
+            <select id="question-count">
+                <option value="5">5問</option>
+                <option value="10" selected>10問</option>
+                <option value="20">20問</option>
+                <option value="50">50問</option>
+            </select>
+        </div>
+
+        <div class="setting-group">
+            <label for="quiz-mode">回答形式:</label>
+            <select id="quiz-mode">
+                <option value="4choice-en-ja">4択 (英 → 和)</option>
+                <option value="4choice-ja-en">4択 (和 → 英)</option>
+                <option value="card-know">知っている単語の確認 (単語カード)</option>
+                <option value="fill-blank">例文穴埋め (記述入力)</option>
+            </select>
+        </div>
+
+        <button onclick="startQuiz()">練習を開始する</button>
+        
+        <div style="margin-top: 30px;">
+            <h3>本日の学習記録</h3>
+            <p id="study-time-log">本日の学習時間: 0秒</p>
+        </div>
+    </div>
+
+    <!-- クイズ画面 -->
+    <div id="quiz-screen" class="hidden">
+        <div id="progress" class="info-text"></div>
+        <button class="audio-btn" onclick="playVoice()">🔊 発音を聞く</button>
+        
+        <div id="question-card" class="card">単語</div>
+        
+        <!-- 4択用コンテナ -->
+        <div id="options-container" class="btn-grid hidden"></div>
+        
+        <!-- 単語カード用コンテナ -->
+        <div id="card-container" class="hidden">
+            <button onclick="toggleCardFlip()" style="background-color: #e67e22;">意味を見る / 隠す</button>
+            <div class="btn-grid" style="margin-top: 10px;">
+                <button onclick="handleCardAnswer(true)" style="background-color: #2ecc71;">知っている</button>
+                <button onclick="handleCardAnswer(false)" style="background-color: #e74c3c;">知らない</button>
+            </div>
+        </div>
+
+        <!-- 記述穴埋め用コンテナ -->
+        <div id="input-container" class="hidden">
+            <input type="text" id="blank-input" placeholder="ここに英単語を入力">
+            <button onclick="handleBlankAnswer()" style="margin-top: 10px;">回答する</button>
+        </div>
+        
+        <div id="example-area" class="example hidden"></div>
+    </div>
+
+    <!-- 結果画面 -->
+    <div id="result-screen" class="hidden">
+        <h2>結果発表</h2>
+        <p id="score-text" style="font-size: 20px; text-align: center;"></p>
+        <button onclick="returnToSetup()">設定に戻る</button>
+    </div>
+</div>
+
+<!-- 単語データベースの読み込み -->
+<script src="words.js"></script>
+<!-- アプリケーションロジック -->
+<script src="app.js"></script>
+</body>
+</html>
