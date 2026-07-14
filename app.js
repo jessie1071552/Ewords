@@ -1,4 +1,3 @@
-// オーディオ環境（Web Audio APIによる効果音の動的生成）
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
 function playSound(type) {
@@ -9,16 +8,16 @@ function playSound(type) {
 
     if (type === 'correct') {
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
-        osc.frequency.setValueAtTime(880.00, audioCtx.currentTime + 0.1); // A5
+        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); 
+        osc.frequency.setValueAtTime(880.00, audioCtx.currentTime + 0.1); 
         gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
         osc.start();
         osc.stop(audioCtx.currentTime + 0.4);
     } else if (type === 'incorrect') {
         osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(220.00, audioCtx.currentTime); // A3
-        osc.frequency.setValueAtTime(165.00, audioCtx.currentTime + 0.12); // E3
+        osc.frequency.setValueAtTime(220.00, audioCtx.currentTime); 
+        osc.frequency.setValueAtTime(165.00, audioCtx.currentTime + 0.12); 
         gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
         osc.start();
@@ -34,6 +33,11 @@ let correctCount = 0;
 let selectedMode = '';
 let activeDataset = [];
 
+// タイマー用変数
+let timerInterval = null;
+let timeLeft = 0;
+let limitSetting = 0;
+
 window.onload = () => {
     startTime = Date.now();
     checkWeakWordCount();
@@ -41,7 +45,6 @@ window.onload = () => {
     setInterval(saveStudyTime, 5000);
 };
 
-// 苦手単語カウントと選択ボタンの動的制御
 function checkWeakWordCount() {
     const weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
     const select = document.getElementById('vocabulary-select');
@@ -49,34 +52,28 @@ function checkWeakWordCount() {
     option.innerText = `苦手な単語 (${weakWords.length}語収録)`;
 }
 
-// 選択されたデータセットを取得する
 function getSelectedDataset() {
     const type = document.getElementById('vocabulary-select').value;
     if (type === 'WEAK_WORDS') {
         return JSON.parse(localStorage.getItem('weakWords') || '[]');
     }
-    
     const filtered = wordDataSet.filter(w => w.type === type);
     return filtered.length > 0 ? filtered : wordDataSet;
 }
 
-// 学習時間のロギング
 function saveStudyTime() {
     const now = Date.now();
     const elapsed = Math.floor((now - startTime) / 1000);
     if (elapsed <= 0) return;
-    
     startTime = now; 
     
     const today = new Date().toISOString().split('T')[0];
     let logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
     logs[today] = (logs[today] || 0) + elapsed;
     localStorage.setItem('studyLogs', JSON.stringify(logs));
-    
     renderChart();
 }
 
-// 苦手単語の追加
 function addWeakWord(wordObj) {
     let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
     if (!weakWords.some(w => w.entry === wordObj.entry)) {
@@ -86,7 +83,6 @@ function addWeakWord(wordObj) {
     checkWeakWordCount();
 }
 
-// 苦手単語の削除
 function removeWeakWord(wordObj) {
     let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
     weakWords = weakWords.filter(w => w.entry !== wordObj.entry);
@@ -94,11 +90,9 @@ function removeWeakWord(wordObj) {
     checkWeakWordCount();
 }
 
-// 簡易グラフの生成
 function renderChart() {
     const chartContainer = document.getElementById('history-chart');
     chartContainer.innerHTML = '';
-    
     const logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
     
     for (let i = 6; i >= 0; i--) {
@@ -106,7 +100,6 @@ function renderChart() {
         d.setDate(d.getDate() - i);
         const dateStr = d.toISOString().split('T')[0];
         const displayDate = dateStr.substring(5); 
-        
         const seconds = logs[dateStr] || 0;
         
         const maxScale = 300;
@@ -125,7 +118,6 @@ function renderChart() {
     }
 }
 
-// クイズ開始
 function startQuiz() {
     activeDataset = getSelectedDataset();
     if (activeDataset.length === 0) {
@@ -136,6 +128,9 @@ function startQuiz() {
     const countSetting = parseInt(document.getElementById('question-count').value, 10);
     const count = Math.min(countSetting, activeDataset.length);
     selectedMode = document.getElementById('quiz-mode').value;
+    
+    // 制限時間の設定値を取得
+    limitSetting = parseInt(document.getElementById('time-limit-select').value, 10);
     
     const shuffled = [...activeDataset].sort(() => 0.5 - Math.random());
     currentQuestions = shuffled.slice(0, count);
@@ -151,12 +146,14 @@ function startQuiz() {
 }
 
 function showQuestion() {
+    // 前の問題のタイマーをクリア
+    clearInterval(timerInterval);
+
     const qData = currentQuestions[currentIndex];
     const total = currentQuestions.length;
     
     document.getElementById('progress').innerText = `問題: ${currentIndex + 1} / ${total}`;
     document.getElementById('example-area').classList.add('hidden');
-    
     document.getElementById('options-container').classList.add('hidden');
     document.getElementById('card-container').classList.add('hidden');
     document.getElementById('input-container').classList.add('hidden');
@@ -186,10 +183,55 @@ function showQuestion() {
         document.getElementById('input-container').classList.remove('hidden');
     }
 
-    // 【追加】「和 → 英」以外のモードの時、画面表示と同時に自動で発音を1回流す
     if (selectedMode !== '4choice-ja-en') {
         playVoice();
     }
+
+    // タイマーの始動処理
+    initTimer();
+}
+
+// タイマーのカウントダウン制御
+function initTimer() {
+    const timerContainer = document.getElementById('timer-container');
+    if (limitSetting <= 0) {
+        timerContainer.classList.add('hidden');
+        return;
+    }
+    
+    timerContainer.classList.remove('hidden');
+    timeLeft = limitSetting;
+    updateTimerUI();
+    
+    timerInterval = setInterval(() => {
+        timeLeft--;
+        updateTimerUI();
+        
+        if (timeLeft <= 0) {
+            clearInterval(timerInterval);
+            handleTimeOut();
+        }
+    }, 1000);
+}
+
+function updateTimerUI() {
+    document.getElementById('timer-text').innerText = `残り: ${timeLeft}秒`;
+    const progressWidth = (timeLeft / limitSetting) * 100;
+    document.getElementById('timer-bar').style.width = `${progressWidth}%`;
+}
+
+// 時間切れ時の自動不正解処理
+function handleTimeOut() {
+    playSound('incorrect');
+    const card = document.getElementById('question-card');
+    card.classList.add('incorrect-flash');
+    
+    const qData = currentQuestions[currentIndex];
+    addWeakWord(qData);
+    
+    setTimeout(() => {
+        nextQuestion();
+    }, 500);
 }
 
 function setupFourChoices(correctData, key) {
@@ -221,6 +263,7 @@ function setupFourChoices(correctData, key) {
 }
 
 function checkAnswer(isCorrect) {
+    clearInterval(timerInterval); // 解答されたらタイマー停止
     const card = document.getElementById('question-card');
     const qData = currentQuestions[currentIndex];
     
@@ -255,6 +298,7 @@ function toggleCardFlip() {
 }
 
 function handleCardAnswer(knows) {
+    clearInterval(timerInterval);
     const qData = currentQuestions[currentIndex];
     if (knows) {
         playSound('correct');
@@ -292,6 +336,7 @@ function nextQuestion() {
 }
 
 function showResult() {
+    clearInterval(timerInterval);
     document.getElementById('quiz-screen').classList.add('hidden');
     document.getElementById('result-screen').classList.remove('hidden');
     document.getElementById('score-text').innerText = 
