@@ -32,7 +32,6 @@
         .option-btn:hover { background-color: #e8f4fd; }
         .audio-btn { background-color: var(--success-color); margin-bottom: 15px; padding: 12px; }
         
-        /* タイマーバーのスタイリング */
         .timer-wrapper { background: #e0e0e0; border-radius: 4px; height: 8px; margin-bottom: 15px; overflow: hidden; }
         .timer-bar { background: var(--warning-color); height: 100%; width: 100%; transition: width 1s linear; }
         .timer-text { font-size: 14px; font-weight: bold; color: var(--error-color); text-align: right; margin-bottom: 5px; }
@@ -46,12 +45,16 @@
         .hidden { display: none; }
         .info-text { font-size: 15px; color: #666; text-align: center; margin-bottom: 10px; }
         
+        /* グラフ・進捗状況表示の共通スタイル */
         .chart-container { margin-top: 20px; background: #f9f9f9; padding: 15px; border-radius: 8px; }
         .chart-row { display: flex; align-items: center; margin-bottom: 8px; }
         .chart-label { width: 90px; font-size: 13px; font-weight: bold; }
         .chart-bar-wrapper { flex-grow: 1; background: #e0e0e0; border-radius: 4px; height: 20px; overflow: hidden; }
         .chart-bar { background: var(--primary-color); height: 100%; width: 0%; transition: width 0.5s ease; }
-        .chart-value { width: 50px; text-align: right; font-size: 13px; margin-left: 5px; }
+        .chart-value { width: 60px; text-align: right; font-size: 13px; margin-left: 5px; }
+        
+        /* 進捗用バーの色分け */
+        .progress-bar { background: var(--success-color); }
     </style>
 </head>
 <body>
@@ -104,7 +107,12 @@
         <button id="start-btn" onclick="startQuiz()">練習を開始する</button>
         
         <div class="chart-container">
-            <h3>過去7日間の学習目標・実績 (秒)</h3>
+            <h3>各章の進捗状況 (修得率)</h3>
+            <div id="progress-container"></div>
+        </div>
+
+        <div class="chart-container">
+            <h3>過去7日間の学習実績 (秒)</h3>
             <div id="history-chart"></div>
         </div>
         <button onclick="clearLogs()" style="background-color: #95a5a6; padding: 8px; font-size: 12px; margin-top: 15px;">記録と苦手単語を初期化</button>
