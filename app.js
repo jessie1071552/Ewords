@@ -60,7 +60,6 @@ function checkWeakWordCount() {
     const srData = JSON.parse(localStorage.getItem('srData') || '{}');
     const now = Date.now();
     
-    // 忘却曲線ベースで現在復習タイミングを迎えている単語数を算出
     let reviewDueCount = 0;
     wordDataSet.forEach(w => {
         if (srData[w.entry] && srData[w.entry].nextReview <= now && srData[w.entry].level < 5) {
@@ -86,10 +85,7 @@ function getSelectedDataset() {
         const srData = JSON.parse(localStorage.getItem('srData') || '{}');
         const now = Date.now();
         
-        // 復習予定日時が現在時刻以前、かつ未完全修得（レベル5未満）の単語を抽出
         let dueWords = wordDataSet.filter(w => srData[w.entry] && srData[w.entry].nextReview <= now && srData[w.entry].level < 5);
-        
-        // もし今すぐ復習する単語がない場合、学習を進めるために未着手（レベル0相当）の単語を割り当てる
         if (dueWords.length === 0) {
             dueWords = wordDataSet.filter(w => !srData[w.entry]);
         }
@@ -114,7 +110,6 @@ function saveStudyTime() {
     renderChart();
 }
 
-// 【追加・修正】忘却曲線データのアップデート処理
 function updateSpacedRepetition(entry, isCorrect) {
     let srData = JSON.parse(localStorage.getItem('srData') || '{}');
     
@@ -123,14 +118,11 @@ function updateSpacedRepetition(entry, isCorrect) {
     }
     
     if (isCorrect) {
-        // 正解ならレベルを上げる（最大5）
         srData[entry].level = Math.min(srData[entry].level + 1, 5);
     } else {
-        // 不正解ならレベルを1に戻す（すぐに再出題させる）
         srData[entry].level = 0;
     }
     
-    // 次回の復習予定日時をタイムスタンプでセット
     const interval = srIntervals[srData[entry].level];
     srData[entry].nextReview = Date.now() + interval;
     
@@ -148,7 +140,6 @@ function addWeakWord(wordObj) {
     history[wordObj.entry] = 'incorrect';
     localStorage.setItem('wordHistory', JSON.stringify(history));
     
-    // 忘却曲線のデータを更新（不正解）
     updateSpacedRepetition(wordObj.entry, false);
     checkWeakWordCount();
 }
@@ -162,7 +153,6 @@ function removeWeakWord(wordObj) {
     history[wordObj.entry] = 'correct';
     localStorage.setItem('wordHistory', JSON.stringify(history));
     
-    // 忘却曲線のデータを更新（正解）
     updateSpacedRepetition(wordObj.entry, true);
     checkWeakWordCount();
 }
@@ -263,12 +253,17 @@ function showQuestion() {
     const card = document.getElementById('question-card');
     card.className = 'card'; 
     
+    // 【追加】読み込んだ配列（meanings_ja_list）からランダムで1つの意味を今回のクイズ用の意味として選定する
+    const meanList = qData.meanings_ja_list || [qData.meaning_ja];
+    qData.selected_single_meaning = meanList[Math.floor(Math.random() * meanList.length)];
+
     if (selectedMode === '4choice-en-ja') {
         card.innerText = qData.entry;
-        setupFourChoices(qData, 'meaning_ja');
+        setupFourChoices(qData, 'en-ja'); 
     } else if (selectedMode === '4choice-ja-en') {
-        card.innerText = qData.meaning_ja;
-        setupFourChoices(qData, 'entry');
+        // 和 → 英 の場合は、選定された1つの意味だけを問題文に表示
+        card.innerText = qData.selected_single_meaning;
+        setupFourChoices(qData, 'ja-en');
     } else if (selectedMode === 'card-know') {
         card.innerText = qData.entry;
         document.getElementById('card-container').classList.remove('hidden');
@@ -332,7 +327,7 @@ function handleTimeOut() {
     }, 1000);
 }
 
-function setupFourChoices(correctData, key) {
+function setupFourChoices(correctData, direction) {
     const container = document.getElementById('options-container');
     container.innerHTML = '';
     container.classList.remove('hidden');
@@ -347,7 +342,22 @@ function setupFourChoices(correctData, key) {
     choices.forEach(choice => {
         const btn = document.createElement('button');
         btn.className = 'option-btn';
-        btn.innerText = choice[key];
+        
+        if (direction === 'en-ja') {
+            // 英 → 和 の選択肢生成
+            if (choice.entry === correctData.entry) {
+                // 正解の選択肢は先ほど選ばれた1つ
+                btn.innerText = correctData.selected_single_meaning;
+            } else {
+                // ダミーの選択肢も、それぞれの単語の意味配列から1つランダムに選ぶ
+                const dList = choice.meanings_ja_list || [choice.meaning_ja];
+                btn.innerText = dList[Math.floor(Math.random() * dList.length)];
+            }
+        } else {
+            // 和 → 英 の選択肢生成（英単語そのもの）
+            btn.innerText = choice.entry;
+        }
+        
         if (choice.entry === correctData.entry) {
             btn.dataset.correct = "true";
         }
@@ -418,7 +428,8 @@ function toggleCardFlip() {
     const card = document.getElementById('question-card');
     const qData = currentQuestions[currentIndex];
     if (card.innerText === qData.entry) {
-        card.innerText = `${qData.entry}\n\n【意味】\n${qData.meaning_ja}`;
+        // カードの裏面はすべての意味が並んだ元の長い文字列を表示し、一挙に復習できるようにする
+        card.innerText = `${qData.entry}\n\n【すべての意味】\n${qData.meaning_ja}`;
         const exArea = document.getElementById('example-area');
         exArea.innerText = `例文: ${qData.example_sentence}\n訳: ${qData.translated_sentence}`;
         exArea.classList.remove('hidden');
@@ -480,7 +491,7 @@ function showResult() {
 function returnToSetup() {
     document.getElementById('result-screen').classList.add('hidden');
     document.getElementById('setup-screen').classList.remove('hidden');
-    checkWeakWordCount(); // 最新の忘却曲線状況をトップ画面に反映
+    checkWeakWordCount(); 
     renderChapterProgress(); 
 }
 
@@ -489,7 +500,7 @@ function clearLogs() {
         localStorage.removeItem('studyLogs');
         localStorage.removeItem('weakWords');
         localStorage.removeItem('wordHistory');
-        localStorage.removeItem('srData'); // 忘却曲線データの削除
+        localStorage.removeItem('srData'); 
         checkWeakWordCount();
         renderChart();
         renderChapterProgress();
