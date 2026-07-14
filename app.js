@@ -25,6 +25,16 @@ function playSound(type) {
     }
 }
 
+// 忘却曲線（間隔反復）の間隔設定（ミリ秒単位）
+const srIntervals = {
+    0: 0,                   // 初期状態
+    1: 60 * 1000,           // レベル1: 1分後
+    2: 24 * 60 * 60 * 1000, // レベル2: 1日後
+    3: 3 * 24 * 60 * 60 * 1000,  // レベル3: 3日後
+    4: 7 * 24 * 60 * 60 * 1000,  // レベル4: 7日後
+    5: 14 * 24 * 60 * 60 * 1000  // レベル5: 14日後（定着）
+};
+
 // 状態変数
 let quizStartTime;
 let currentQuestions = [];
@@ -32,7 +42,7 @@ let currentIndex = 0;
 let correctCount = 0;
 let selectedMode = '';
 let activeDataset = [];
-let isQuizActive = false; // 【追加】クイズ中かどうかの判定フラグ
+let isQuizActive = false;
 
 let timerInterval = null;
 let timeLeft = 0;
@@ -41,16 +51,29 @@ let limitSetting = 0;
 window.onload = () => {
     checkWeakWordCount();
     renderChart();
-    renderChapterProgress(); // 【追加】進捗バー表示
-    // 定期的な保存処理ルーチン（クイズ中のみ加算を実行）
+    renderChapterProgress(); 
     setInterval(saveStudyTime, 2000);
 };
 
 function checkWeakWordCount() {
     const weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
+    const srData = JSON.parse(localStorage.getItem('srData') || '{}');
+    const now = Date.now();
+    
+    // 忘却曲線ベースで現在復習タイミングを迎えている単語数を算出
+    let reviewDueCount = 0;
+    wordDataSet.forEach(w => {
+        if (srData[w.entry] && srData[w.entry].nextReview <= now && srData[w.entry].level < 5) {
+            reviewDueCount++;
+        }
+    });
+
     const select = document.getElementById('vocabulary-select');
-    const option = select.querySelector('option[value="WEAK_WORDS"]');
-    option.innerText = `苦手な単語 (${weakWords.length}語収録)`;
+    const optionWeak = select.querySelector('option[value="WEAK_WORDS"]');
+    optionWeak.innerText = `苦手な単語 (${weakWords.length}語収録)`;
+    
+    const optionSR = select.querySelector('option[value="SPACED_REPETITION"]');
+    optionSR.innerText = `忘却曲線モード (今すぐ復習: ${reviewDueCount}語)`;
 }
 
 function getSelectedDataset() {
@@ -58,29 +81,62 @@ function getSelectedDataset() {
     if (type === 'WEAK_WORDS') {
         return JSON.parse(localStorage.getItem('weakWords') || '[]');
     }
+    
+    if (type === 'SPACED_REPETITION') {
+        const srData = JSON.parse(localStorage.getItem('srData') || '{}');
+        const now = Date.now();
+        
+        // 復習予定日時が現在時刻以前、かつ未完全修得（レベル5未満）の単語を抽出
+        let dueWords = wordDataSet.filter(w => srData[w.entry] && srData[w.entry].nextReview <= now && srData[w.entry].level < 5);
+        
+        // もし今すぐ復習する単語がない場合、学習を進めるために未着手（レベル0相当）の単語を割り当てる
+        if (dueWords.length === 0) {
+            dueWords = wordDataSet.filter(w => !srData[w.entry]);
+        }
+        return dueWords;
+    }
+    
     const filtered = wordDataSet.filter(w => w.type === type);
     return filtered.length > 0 ? filtered : wordDataSet;
 }
 
-// 【修正】クイズアクティブ時のみ学習時間を計測・保存
 function saveStudyTime() {
     if (!isQuizActive) return; 
-    
     const now = Date.now();
     const elapsed = Math.floor((now - quizStartTime) / 1000);
     if (elapsed <= 0) return;
     
     quizStartTime = now; 
-    
     const today = new Date().toISOString().split('T')[0];
     let logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
     logs[today] = (logs[today] || 0) + elapsed;
     localStorage.setItem('studyLogs', JSON.stringify(logs));
-    
     renderChart();
 }
 
-// 苦手単語への追加および履歴管理
+// 【追加・修正】忘却曲線データのアップデート処理
+function updateSpacedRepetition(entry, isCorrect) {
+    let srData = JSON.parse(localStorage.getItem('srData') || '{}');
+    
+    if (!srData[entry]) {
+        srData[entry] = { level: 0, nextReview: 0 };
+    }
+    
+    if (isCorrect) {
+        // 正解ならレベルを上げる（最大5）
+        srData[entry].level = Math.min(srData[entry].level + 1, 5);
+    } else {
+        // 不正解ならレベルを1に戻す（すぐに再出題させる）
+        srData[entry].level = 0;
+    }
+    
+    // 次回の復習予定日時をタイムスタンプでセット
+    const interval = srIntervals[srData[entry].level];
+    srData[entry].nextReview = Date.now() + interval;
+    
+    localStorage.setItem('srData', JSON.stringify(srData));
+}
+
 function addWeakWord(wordObj) {
     let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
     if (!weakWords.some(w => w.entry === wordObj.entry)) {
@@ -88,11 +144,12 @@ function addWeakWord(wordObj) {
         localStorage.setItem('weakWords', JSON.stringify(weakWords));
     }
     
-    // 間違えた履歴（進捗判定用）を保存
     let history = JSON.parse(localStorage.getItem('wordHistory') || '{}');
     history[wordObj.entry] = 'incorrect';
     localStorage.setItem('wordHistory', JSON.stringify(history));
     
+    // 忘却曲線のデータを更新（不正解）
+    updateSpacedRepetition(wordObj.entry, false);
     checkWeakWordCount();
 }
 
@@ -101,19 +158,18 @@ function removeWeakWord(wordObj) {
     weakWords = weakWords.filter(w => w.entry !== wordObj.entry);
     localStorage.setItem('weakWords', JSON.stringify(weakWords));
     
-    // 正解した履歴（進捗判定用）を保存
     let history = JSON.parse(localStorage.getItem('wordHistory') || '{}');
     history[wordObj.entry] = 'correct';
     localStorage.setItem('wordHistory', JSON.stringify(history));
     
+    // 忘却曲線のデータを更新（正解）
+    updateSpacedRepetition(wordObj.entry, true);
     checkWeakWordCount();
 }
 
-// 【追加】各章の進捗状況のグラフ描画
 function renderChapterProgress() {
     const container = document.getElementById('progress-container');
     container.innerHTML = '';
-    
     const chapters = ['NGSL', 'NAWL', 'TSL', 'BSL'];
     const history = JSON.parse(localStorage.getItem('wordHistory') || '{}');
     
@@ -121,7 +177,6 @@ function renderChapterProgress() {
         const chWords = wordDataSet.filter(w => w.type === ch);
         if (chWords.length === 0) return;
         
-        // 当該章で「一度クイズに出題され、現在苦手リストに残っていない（＝修得済み）」数をカウント
         const masteredCount = chWords.filter(w => history[w.entry] === 'correct').length;
         const percent = Math.round((masteredCount / chWords.length) * 100);
         
@@ -169,7 +224,7 @@ function renderChart() {
 function startQuiz() {
     activeDataset = getSelectedDataset();
     if (activeDataset.length === 0) {
-        alert("選択された単語帳にデータがありません。");
+        alert("選択されたモードに該当する単語がありません。");
         return;
     }
 
@@ -184,7 +239,6 @@ function startQuiz() {
     currentIndex = 0;
     correctCount = 0;
     
-    // クイズ開始のタイマー割り当てフラグ変更
     isQuizActive = true;
     quizStartTime = Date.now();
     
@@ -197,7 +251,6 @@ function startQuiz() {
 
 function showQuestion() {
     clearInterval(timerInterval);
-
     const qData = currentQuestions[currentIndex];
     const total = currentQuestions.length;
     
@@ -235,7 +288,6 @@ function showQuestion() {
     if (selectedMode !== '4choice-ja-en') {
         playVoice();
     }
-
     initTimer();
 }
 
@@ -285,17 +337,10 @@ function setupFourChoices(correctData, key) {
     container.innerHTML = '';
     container.classList.remove('hidden');
     
-    const dummies = activeDataset
+    const dummies = wordDataSet
         .filter(w => w.entry !== correctData.entry)
         .sort(() => 0.5 - Math.random())
         .slice(0, 3);
-        
-    while (dummies.length < 3) {
-        const fallback = wordDataSet[Math.floor(Math.random() * wordDataSet.length)];
-        if (fallback.entry !== correctData.entry && !dummies.some(d => d.entry === fallback.entry)) {
-            dummies.push(fallback);
-        }
-    }
         
     const choices = [correctData, ...dummies].sort(() => 0.5 - Math.random());
     
@@ -423,7 +468,7 @@ function nextQuestion() {
 
 function showResult() {
     clearInterval(timerInterval);
-    isQuizActive = false; // クイズ終了に伴い計測停止
+    isQuizActive = false; 
     saveStudyTime();
 
     document.getElementById('quiz-screen').classList.add('hidden');
@@ -435,14 +480,16 @@ function showResult() {
 function returnToSetup() {
     document.getElementById('result-screen').classList.add('hidden');
     document.getElementById('setup-screen').classList.remove('hidden');
-    renderChapterProgress(); // 設定画面に戻った際に最新の進捗を反映
+    checkWeakWordCount(); // 最新の忘却曲線状況をトップ画面に反映
+    renderChapterProgress(); 
 }
 
 function clearLogs() {
-    if (confirm("学習記録・苦手単語・各章の進捗データを完全に削除してよいか？")) {
+    if (confirm("学習記録・苦手単語・忘却曲線等のすべてのデータを初期化してよいか？")) {
         localStorage.removeItem('studyLogs');
         localStorage.removeItem('weakWords');
-        localStorage.removeItem('wordHistory'); // 履歴の削除
+        localStorage.removeItem('wordHistory');
+        localStorage.removeItem('srData'); // 忘却曲線データの削除
         checkWeakWordCount();
         renderChart();
         renderChapterProgress();
