@@ -1,536 +1,173 @@
-// オーディオ環境（Web Audio APIによる効果音の動的生成）
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-function playSound(type) {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-
-    if (type === 'correct') {
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
-        osc.frequency.setValueAtTime(880.00, audioCtx.currentTime + 0.1); // A5
-        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.4);
-    } else if (type === 'incorrect') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(220.00, audioCtx.currentTime); // A3
-        osc.frequency.setValueAtTime(165.00, audioCtx.currentTime + 0.12); // E3
-        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.5);
-    }
-}
-
-// 忘却曲線（間隔反復）の間隔設定（ミリ秒単位）
-const srIntervals = {
-    0: 0,                   // 初期状態
-    1: 60 * 1000,           // レベル1: 1分後
-    2: 24 * 60 * 60 * 1000, // レベル2: 1日後
-    3: 3 * 24 * 60 * 60 * 1000,  // レベル3: 3日後
-    4: 7 * 24 * 60 * 60 * 1000,  // レベル4: 7日後
-    5: 14 * 24 * 60 * 60 * 1000  // レベル5: 14日後（定着）
-};
-
-// 状態変数
-let quizStartTime;
-let currentQuestions = [];
-let currentIndex = 0;
-let correctCount = 0;
-let selectedMode = '';
-let activeDataset = [];
-let isQuizActive = false; // クイズ中のみ計測するフラグ
-
-let timerInterval = null;
-let timeLeft = 0;
-let limitSetting = 0;
-
-window.onload = () => {
-    checkWeakWordCount();
-    renderChart();
-    renderChapterProgress(); 
-    // 定期的な保存処理ルーチン（クイズ中のみ加算を実行）
-    setInterval(saveStudyTime, 2000);
-};
-
-// 苦手単語数および忘却曲線による要復習数のカウント
-function checkWeakWordCount() {
-    const weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
-    const srData = JSON.parse(localStorage.getItem('srData') || '{}');
-    const now = Date.now();
-    
-    // 忘却曲線ベースで現在復習タイミングを迎えている単語数を算出
-    let reviewDueCount = 0;
-    wordDataSet.forEach(w => {
-        if (srData[w.entry] && srData[w.entry].nextReview <= now && srData[w.entry].level < 5) {
-            reviewDueCount++;
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>マルチ対応 英単語練習アプリ</title>
+    <style>
+        :root {
+            --primary-color: #3498db;
+            --success-color: #2ecc71;
+            --error-color: #e74c3c;
+            --warning-color: #e67e22;
+            --dark-color: #2c3e50;
+            --gray-color: #7f8c8d;
         }
-    });
-
-    const select = document.getElementById('vocabulary-select');
-    const optionWeak = select.querySelector('option[value="WEAK_WORDS"]');
-    optionWeak.innerText = `苦手な単語 (${weakWords.length}語収録)`;
-    
-    const optionSR = select.querySelector('option[value="SPACED_REPETITION"]');
-    optionSR.innerText = `忘却曲線モード (今すぐ復習: ${reviewDueCount}語)`;
-}
-
-// 選択されたデータセットを取得する
-function getSelectedDataset() {
-    const type = document.getElementById('vocabulary-select').value;
-    if (type === 'WEAK_WORDS') {
-        return JSON.parse(localStorage.getItem('weakWords') || '[]');
-    }
-    
-    if (type === 'SPACED_REPETITION') {
-        const srData = JSON.parse(localStorage.getItem('srData') || '{}');
-        const now = Date.now();
+        body { font-family: Arial, sans-serif; background-color: #f4f7f6; color: #333; padding: 10px; margin: 0; }
+        .container { max-width: 600px; margin: 10px auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); box-sizing: border-box; }
+        h1 { text-align: center; color: var(--dark-color); font-size: 24px; margin-bottom: 20px; }
+        .setting-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 16px; }
+        select, input, button { width: 100%; padding: 15px; margin-top: 5px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; font-size: 16px; }
         
-        // 復習予定日時が現在時刻以前、かつ未完全修得（レベル5未満）の単語を抽出
-        let dueWords = wordDataSet.filter(w => srData[w.entry] && srData[w.entry].nextReview <= now && srData[w.entry].level < 5);
+        button { color: white; border: none; font-weight: bold; cursor: pointer; transition: transform 0.1s, background-color: 0.2s; -webkit-tap-highlight-color: transparent; }
+        button:active { transform: scale(0.98); }
+        .primary-btn { background-color: var(--primary-color); }
         
-        // もし今すぐ復習する単語がない場合、学習を進めるために未着手（レベル0相当）の単語を割り当てる
-        if (dueWords.length === 0) {
-            dueWords = wordDataSet.filter(w => !srData[w.entry]);
-        }
-        return dueWords;
-    }
-    
-    const filtered = wordDataSet.filter(w => w.type === type);
-    return filtered.length > 0 ? filtered : wordDataSet;
-}
-
-// クイズアクティブ時のみ学習時間を計測・保存
-function saveStudyTime() {
-    if (!isQuizActive) return; 
-    
-    const now = Date.now();
-    const elapsed = Math.floor((now - quizStartTime) / 1000);
-    if (elapsed <= 0) return;
-    
-    quizStartTime = now; 
-    
-    const today = new Date().toISOString().split('T')[0];
-    let logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
-    logs[today] = (logs[today] || 0) + elapsed;
-    localStorage.setItem('studyLogs', JSON.stringify(logs));
-    
-    renderChart();
-}
-
-// 忘却曲線データのアップデート処理
-function updateSpacedRepetition(entry, isCorrect) {
-    let srData = JSON.parse(localStorage.getItem('srData') || '{}');
-    
-    if (!srData[entry]) {
-        srData[entry] = { level: 0, nextReview: 0 };
-    }
-    
-    if (isCorrect) {
-        // 正解ならレベルを上げる（最大5）
-        srData[entry].level = Math.min(srData[entry].level + 1, 5);
-    } else {
-        // 不正解ならレベルを0に戻す
-        srData[entry].level = 0;
-    }
-    
-    // 次回の復習予定日時をタイムスタンプでセット
-    const interval = srIntervals[srData[entry].level];
-    srData[entry].nextReview = Date.now() + interval;
-    
-    localStorage.setItem('srData', JSON.stringify(srData));
-}
-
-// 苦手単語の追加
-function addWeakWord(wordObj) {
-    let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
-    if (!weakWords.some(w => w.entry === wordObj.entry)) {
-        weakWords.push(wordObj);
-        localStorage.setItem('weakWords', JSON.stringify(weakWords));
-    }
-    
-    // 履歴（進捗判定用）を保存
-    let history = JSON.parse(localStorage.getItem('wordHistory') || '{}');
-    history[wordObj.entry] = 'incorrect';
-    localStorage.setItem('wordHistory', JSON.stringify(history));
-    
-    // 忘却曲線のデータを更新（不正解）
-    updateSpacedRepetition(wordObj.entry, false);
-    checkWeakWordCount();
-}
-
-// 苦手単語の削除
-function removeWeakWord(wordObj) {
-    let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
-    weakWords = weakWords.filter(w => w.entry !== wordObj.entry);
-    localStorage.setItem('weakWords', JSON.stringify(weakWords));
-    
-    // 履歴（進捗判定用）を保存
-    let history = JSON.parse(localStorage.getItem('wordHistory') || '{}');
-    history[wordObj.entry] = 'correct';
-    localStorage.setItem('wordHistory', JSON.stringify(history));
-    
-    // 忘却曲線のデータを更新（正解）
-    updateSpacedRepetition(wordObj.entry, true);
-    checkWeakWordCount();
-}
-
-// 各章の進捗状況のグラフ描画
-function renderChapterProgress() {
-    const container = document.getElementById('progress-container');
-    container.innerHTML = '';
-    
-    const chapters = ['NGSL', 'NAWL', 'TSL', 'BSL'];
-    const history = JSON.parse(localStorage.getItem('wordHistory') || '{}');
-    
-    chapters.forEach(ch => {
-        const chWords = wordDataSet.filter(w => w.type === ch);
-        if (chWords.length === 0) return;
+        .card { background: #ecf0f1; padding: 30px 15px; border-radius: 8px; text-align: center; font-size: 26px; font-weight: bold; margin-bottom: 20px; position: relative; min-height: 80px; display: flex; flex-direction: column; justify-content: center; align-items: center; word-break: break-word; transition: background-color 0.5s ease; color: #333; }
+        .example { font-size: 16px; color: #555; margin-top: 15px; text-align: left; background: #fff; padding: 12px; border-left: 4px solid var(--primary-color); border-radius: 0 8px 8px 0; }
         
-        // 当該章で「一度クイズに出題され、現在苦手リストに残っていない（＝修得済み）」数をカウント
-        const masteredCount = chWords.filter(w => history[w.entry] === 'correct').length;
-        const percent = Math.round((masteredCount / chWords.length) * 100);
+        .btn-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 10px; }
+        @media(min-width: 480px) { .btn-grid { grid-template-columns: 1fr 1fr; } }
         
-        const row = document.createElement('div');
-        row.className = 'chart-row';
-        row.innerHTML = `
-            <div class="chart-label">${ch}</div>
-            <div class="chart-bar-wrapper">
-                <div class="chart-bar progress-bar" style="width: ${percent}%"></div>
+        .option-btn { background-color: #fff; color: #333; border: 2px solid var(--primary-color); padding: 18px 10px; font-size: 16px; }
+        .option-btn:hover { background-color: #e8f4fd; }
+        .audio-btn { background-color: var(--success-color); margin-bottom: 15px; padding: 12px; }
+        
+        /* わからない・やめるボタン用の独立スタイル */
+        .action-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-top: 20px; border-top: 1px solid #eee; padding-top: 25px; }
+        .dont-know-btn { background-color: var(--warning-color); padding: 15px; }
+        .quit-btn { background-color: var(--gray-color); padding: 15px; }
+        
+        .timer-wrapper { background: #e0e0e0; border-radius: 4px; height: 8px; margin-bottom: 15px; overflow: hidden; }
+        .timer-bar { background: var(--warning-color); height: 100%; width: 100%; transition: width 1s linear; }
+        .timer-text { font-size: 14px; font-weight: bold; color: var(--error-color); text-align: right; margin-bottom: 5px; }
+
+        .correct-flash { background-color: rgba(46, 204, 113, 0.3) !important; animation: pop 0.4s ease; }
+        .incorrect-flash { background-color: rgba(231, 76, 60, 0.3) !important; animation: shake 0.4s ease; }
+        
+        @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.03); } 100% { transform: scale(1); } }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+        
+        .hidden { display: none; }
+        .info-text { font-size: 15px; color: #666; text-align: center; margin-bottom: 10px; }
+        
+        .chart-container { margin-top: 20px; background: #f9f9f9; padding: 15px; border-radius: 8px; }
+        .chart-row { display: flex; align-items: center; margin-bottom: 8px; }
+        .chart-label { width: 90px; font-size: 13px; font-weight: bold; }
+        .chart-bar-wrapper { flex-grow: 1; background: #e0e0e0; border-radius: 4px; height: 20px; overflow: hidden; }
+        .chart-bar { background: var(--primary-color); height: 100%; width: 0%; transition: width 0.5s ease; }
+        .chart-value { width: 60px; text-align: right; font-size: 13px; margin-left: 5px; }
+        .progress-bar { background: var(--success-color); }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>英単語トレーニング</h1>
+
+    <div id="setup-screen">
+        <div class="setting-group">
+            <label for="vocabulary-select">単語帳の種類:</label>
+            <select id="vocabulary-select" onchange="checkWeakWordCount()">
+                <option value="NGSL" selected>NGSL (一般基本単語)</option>
+                <option value="NAWL">NAWL (学術用英単語)</option>
+                <option value="TSL">TSL (TOEIC向け英単語)</option>
+                <option value="BSL">BSL (ビジネス用英単語)</option>
+                <option value="SPACED_REPETITION">忘却曲線モード (要復習単語)</option>
+                <option value="WEAK_WORDS">苦手な単語 (手動復習用)</option>
+            </select>
+        </div>
+
+        <div class="setting-group">
+            <label for="question-count">一回ごとの出題数:</label>
+            <select id="question-count">
+                <option value="5">5問</option>
+                <option value="10" selected>10問</option>
+                <option value="20">20問</option>
+                <option value="50">50問</option>
+            </select>
+        </div>
+
+        <div class="setting-group">
+            <label for="quiz-mode">回答形式:</label>
+            <select id="quiz-mode">
+                <option value="4choice-en-ja">4択 (英 → 和)</option>
+                <option value="4choice-ja-en">4択 (和 → 英)</option>
+                <option value="card-know">単語カード (知っているかの確認)</option>
+                <option value="fill-blank">例文穴埋め (記述式)</option>
+            </select>
+        </div>
+
+        <div class="setting-group">
+            <label for="time-limit-select">一問あたりの制限時間:</label>
+            <select id="time-limit-select">
+                <option value="0">制限時間なし</option>
+                <option value="10">10秒</option>
+                <option value="20" selected>20秒 (基本)</option>
+                <option value="30">30秒</option>
+            </select>
+        </div>
+
+        <button id="start-btn" class="primary-btn" onclick="startQuiz()">練習を開始する</button>
+        
+        <div class="chart-container">
+            <h3>各章の進捗状況 (修得率)</h3>
+            <div id="progress-container"></div>
+        </div>
+
+        <div class="chart-container">
+            <h3>過去7日間の学習実績 (秒)</h3>
+            <div id="history-chart"></div>
+        </div>
+        <button onclick="clearLogs()" style="background-color: #95a5a6; padding: 8px; font-size: 12px; margin-top: 15px;">記録と苦手単語を初期化</button>
+    </div>
+
+    <div id="quiz-screen" class="hidden">
+        <div id="progress" class="info-text"></div>
+        
+        <div id="timer-container" class="hidden">
+            <div id="timer-text" class="timer-text">残り: 20秒</div>
+            <div class="timer-wrapper">
+                <div id="timer-bar" class="timer-bar"></div>
             </div>
-            <div class="chart-value">${percent}%</div>
-        `;
-        container.appendChild(row);
-    });
-}
+        </div>
 
-// 過去7日間の学習実績グラフ
-function renderChart() {
-    const chartContainer = document.getElementById('history-chart');
-    chartContainer.innerHTML = '';
-    const logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
-    
-    for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const dateStr = d.toISOString().split('T')[0];
-        const displayDate = dateStr.substring(5); 
-        const seconds = logs[dateStr] || 0;
+        <button class="audio-btn" onclick="playVoice()">🔊 発音を聞く</button>
         
-        const maxScale = 300;
-        const percentage = Math.min((seconds / maxScale) * 100, 100);
+        <div id="question-card" class="card">単語</div>
         
-        const row = document.createElement('div');
-        row.className = 'chart-row';
-        row.innerHTML = `
-            <div class="chart-label">${displayDate}</div>
-            <div class="chart-bar-wrapper">
-                <div class="chart-bar" style="width: ${percentage}%"></div>
+        <div id="options-container" class="btn-grid hidden"></div>
+        
+        <div id="card-container" class="hidden">
+            <button onclick="toggleCardFlip()" style="background-color: var(--warning-color); padding: 18px;">意味を見る / 隠す</button>
+            <div class="btn-grid" style="margin-top: 15px;">
+                <button onclick="handleCardAnswer(true)" style="background-color: var(--success-color); padding: 18px;">知っている</button>
+                <button onclick="handleCardAnswer(false)" style="background-color: var(--error-color); padding: 18px;">知らない</button>
             </div>
-            <div class="chart-value">${seconds}秒</div>
-        `;
-        chartContainer.appendChild(row);
-    }
-}
+        </div>
 
-// クイズ開始
-function startQuiz() {
-    activeDataset = getSelectedDataset();
-    if (activeDataset.length === 0) {
-        alert("選択されたモードに該当する単語がありません。");
-        return;
-    }
-
-    const countSetting = parseInt(document.getElementById('question-count').value, 10);
-    const count = Math.min(countSetting, activeDataset.length);
-    selectedMode = document.getElementById('quiz-mode').value;
-    limitSetting = parseInt(document.getElementById('time-limit-select').value, 10);
-    
-    const shuffled = [...activeDataset].sort(() => 0.5 - Math.random());
-    currentQuestions = shuffled.slice(0, count);
-    
-    currentIndex = 0;
-    correctCount = 0;
-    
-    isQuizActive = true;
-    quizStartTime = Date.now();
-    
-    document.getElementById('setup-screen').classList.add('hidden');
-    document.getElementById('quiz-screen').classList.remove('hidden');
-    document.getElementById('result-screen').classList.add('hidden');
-    
-    showQuestion();
-}
-
-function showQuestion() {
-    clearInterval(timerInterval);
-    const qData = currentQuestions[currentIndex];
-    const total = currentQuestions.length;
-    
-    document.getElementById('progress').innerText = `問題: ${currentIndex + 1} / ${total}`;
-    document.getElementById('example-area').classList.add('hidden');
-    document.getElementById('options-container').classList.add('hidden');
-    document.getElementById('card-container').classList.add('hidden');
-    document.getElementById('input-container').classList.add('hidden');
-    
-    const card = document.getElementById('question-card');
-    card.className = 'card'; 
-    
-    // 読み込んだ配列（meanings_ja_list）からランダムで1つの意味を今回のクイズ用の意味として選定
-    const meanList = qData.meanings_ja_list || [qData.meaning_ja];
-    qData.selected_single_meaning = meanList[Math.floor(Math.random() * meanList.length)];
-
-    if (selectedMode === '4choice-en-ja') {
-        card.innerText = qData.entry;
-        setupFourChoices(qData, 'en-ja'); 
-    } else if (selectedMode === '4choice-ja-en') {
-        // 和 → 英 の場合は、選定された1つの意味だけを問題文に表示
-        card.innerText = qData.selected_single_meaning;
-        setupFourChoices(qData, 'ja-en');
-    } else if (selectedMode === 'card-know') {
-        card.innerText = qData.entry;
-        document.getElementById('card-container').classList.remove('hidden');
-    } else if (selectedMode === 'fill-blank') {
-        const regex = new RegExp(qData.entry, 'gi');
-        const blanked = qData.example_sentence.replace(regex, '_______');
-        card.innerText = blanked;
+        <div id="input-container" class="hidden">
+            <input type="text" id="blank-input" placeholder="ここに英単語を入力" autocorrect="off" autocapitalize="none">
+            <button onclick="handleBlankAnswer()" style="margin-top: 15px; background-color: var(--dark-color);">回答する</button>
+        </div>
         
-        const exArea = document.getElementById('example-area');
-        exArea.innerText = `和訳: ${qData.translated_sentence}`;
-        exArea.classList.remove('hidden');
-        
-        document.getElementById('blank-input').value = '';
-        document.getElementById('input-container').classList.remove('hidden');
-    }
+        <div id="example-area" class="example hidden"></div>
 
-    if (selectedMode !== '4choice-ja-en') {
-        playVoice();
-    }
-    initTimer();
-}
+        <div class="action-grid">
+            <button id="dont-know-btn" class="dont-know-btn" onclick="handleDontKnow()">わからない</button>
+            <button class="quit-btn" onclick="handleQuitQuiz()">やめる</button>
+        </div>
+    </div>
 
-// 制限時間タイマー
-function initTimer() {
-    const timerContainer = document.getElementById('timer-container');
-    if (limitSetting <= 0) {
-        timerContainer.classList.add('hidden');
-        return;
-    }
-    
-    timerContainer.classList.remove('hidden');
-    timeLeft = limitSetting;
-    updateTimerUI();
-    
-    timerInterval = setInterval(() => {
-        timeLeft--;
-        updateTimerUI();
-        
-        if (timeLeft <= 0) {
-            clearInterval(timerInterval);
-            handleTimeOut();
-        }
-    }, 1000);
-}
+    <div id="result-screen" class="hidden">
+        <h2>結果発表</h2>
+        <p id="score-text" style="font-size: 20px; text-align: center; font-weight: bold; color: #333;"></p>
+        <button class="primary-btn" onclick="returnToSetup()">設定に戻る</button>
+    </div>
+</div>
 
-function updateTimerUI() {
-    document.getElementById('timer-text').innerText = `残り: ${timeLeft}秒`;
-    const progressWidth = (timeLeft / limitSetting) * 100;
-    document.getElementById('timer-bar').style.width = `${progressWidth}%`;
-}
-
-// 時間切れ時の処理
-function handleTimeOut() {
-    playSound('incorrect');
-    const card = document.getElementById('question-card');
-    card.classList.add('incorrect-flash');
-    
-    const qData = currentQuestions[currentIndex];
-    addWeakWord(qData);
-    
-    setTimeout(() => {
-        nextQuestion();
-    }, 1000);
-}
-
-function setupFourChoices(correctData, direction) {
-    const container = document.getElementById('options-container');
-    container.innerHTML = '';
-    container.classList.remove('hidden');
-    
-    const dummies = wordDataSet
-        .filter(w => w.entry !== correctData.entry)
-        .sort(() => 0.5 - Math.random())
-        .slice(0, 3);
-        
-    const choices = [correctData, ...dummies].sort(() => 0.5 - Math.random());
-    
-    choices.forEach(choice => {
-        const btn = document.createElement('button');
-        btn.className = 'option-btn';
-        
-        if (direction === 'en-ja') {
-            if (choice.entry === correctData.entry) {
-                // 正解の選択肢は先ほどランダム選出された1つ
-                btn.innerText = correctData.selected_single_meaning;
-            } else {
-                // ダミーの選択肢も、それぞれの単語の意味配列から1つランダムに選ぶ
-                const dList = choice.meanings_ja_list || [choice.meaning_ja];
-                btn.innerText = dList[Math.floor(Math.random() * dList.length)];
-            }
-        } else {
-            // 和 → 英 の選択肢生成（英単語そのもの）
-            btn.innerText = choice.entry;
-        }
-        
-        if (choice.entry === correctData.entry) {
-            btn.dataset.correct = "true";
-        }
-        btn.onclick = (e) => handleChoiceSelection(e.target, choice.entry === correctData.entry);
-        container.appendChild(btn);
-    });
-}
-
-function handleChoiceSelection(clickedButton, isCorrect) {
-    clearInterval(timerInterval); 
-    const container = document.getElementById('options-container');
-    const buttons = container.querySelectorAll('.option-btn');
-    buttons.forEach(btn => btn.disabled = true);
-
-    const card = document.getElementById('question-card');
-    const qData = currentQuestions[currentIndex];
-    
-    if (isCorrect) {
-        playSound('correct');
-        card.classList.add('correct-flash');
-        clickedButton.style.backgroundColor = "var(--success-color)";
-        clickedButton.style.color = "white";
-        correctCount++;
-        removeWeakWord(qData);
-    } else {
-        playSound('incorrect');
-        card.classList.add('incorrect-flash');
-        clickedButton.style.backgroundColor = "var(--error-color)";
-        clickedButton.style.color = "white";
-        
-        buttons.forEach(btn => {
-            if (btn.dataset.correct === "true") {
-                btn.style.backgroundColor = "var(--success-color)";
-                btn.style.color = "white";
-                btn.style.border = "2px solid #27ae60";
-            }
-        });
-        addWeakWord(qData); 
-    }
-    
-    setTimeout(() => {
-        nextQuestion();
-    }, 1000);
-}
-
-function checkAnswer(isCorrect) {
-    clearInterval(timerInterval); 
-    const card = document.getElementById('question-card');
-    const qData = currentQuestions[currentIndex];
-    
-    if (isCorrect) {
-        playSound('correct');
-        card.classList.add('correct-flash');
-        correctCount++;
-        removeWeakWord(qData);
-    } else {
-        playSound('incorrect');
-        card.classList.add('incorrect-flash');
-        addWeakWord(qData); 
-    }
-    
-    setTimeout(() => {
-        nextQuestion();
-    }, 1000);
-}
-
-function toggleCardFlip() {
-    const card = document.getElementById('question-card');
-    const qData = currentQuestions[currentIndex];
-    if (card.innerText === qData.entry) {
-        // 全ての意味を確認する際は元の長い文字列を出す
-        card.innerText = `${qData.entry}\n\n【すべての意味】\n${qData.meaning_ja}`;
-        const exArea = document.getElementById('example-area');
-        exArea.innerText = `例文: ${qData.example_sentence}\n訳: ${qData.translated_sentence}`;
-        exArea.classList.remove('hidden');
-    } else {
-        card.innerText = qData.entry;
-        document.getElementById('example-area').classList.add('hidden');
-    }
-}
-
-function handleCardAnswer(knows) {
-    clearInterval(timerInterval);
-    const qData = currentQuestions[currentIndex];
-    if (knows) {
-        playSound('correct');
-        correctCount++;
-        removeWeakWord(qData);
-        nextQuestion();
-    } else {
-        playSound('incorrect');
-        addWeakWord(qData);
-        nextQuestion();
-    }
-}
-
-function handleBlankAnswer() {
-    const input = document.getElementById('blank-input').value.trim().toLowerCase();
-    const correctAns = currentQuestions[currentIndex].entry.toLowerCase();
-    checkAnswer(input === correctAns);
-}
-
-function playVoice() {
-    const qData = currentQuestions[currentIndex];
-    if (!qData) return;
-    const utterance = new SpeechSynthesisUtterance(qData.entry);
-    utterance.lang = 'en-US';
-    window.speechSynthesis.speak(utterance);
-}
-
-function nextQuestion() {
-    currentIndex++;
-    if (currentIndex < currentQuestions.length) {
-        showQuestion();
-    } else {
-        showResult();
-    }
-}
-
-function showResult() {
-    clearInterval(timerInterval);
-    isQuizActive = false; // クイズ終了に伴い計測停止
-    saveStudyTime();
-
-    document.getElementById('quiz-screen').classList.add('hidden');
-    document.getElementById('result-screen').classList.remove('hidden');
-    document.getElementById('score-text').innerText = 
-        `${currentQuestions.length}問中 ${correctCount}問正解！\n正解率: ${Math.round((correctCount / currentQuestions.length) * 100)}%`;
-}
-
-function returnToSetup() {
-    document.getElementById('result-screen').classList.add('hidden');
-    document.getElementById('setup-screen').classList.remove('hidden');
-    checkWeakWordCount(); 
-    renderChapterProgress(); 
-}
-
-function clearLogs() {
-    if (confirm("学習記録・苦手単語・忘却曲線等のすべてのデータを初期化してよいか？")) {
-        localStorage.removeItem('studyLogs');
-        localStorage.removeItem('weakWords');
-        localStorage.removeItem('wordHistory');
-        localStorage.removeItem('srData'); 
-        checkWeakWordCount();
-        renderChart();
-        renderChapterProgress();
-    }
-}
+<script src="words.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
