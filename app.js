@@ -1,47 +1,148 @@
-// 学習時間の記録用変数
-let startTime;
-let totalStudyTime = parseInt(localStorage.getItem('totalStudyTime') || '0', 10);
+// オーディオ環境（Web Audio APIによる効果音の動的生成）
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-// クイズ状態管理
+function playSound(type) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    if (type === 'correct') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+        osc.frequency.setValueAtTime(880.00, audioCtx.currentTime + 0.1); // A5
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.4);
+    } else if (type === 'incorrect') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220.00, audioCtx.currentTime); // A3
+        osc.frequency.setValueAtTime(165.00, audioCtx.currentTime + 0.12); // E3
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.5);
+    }
+}
+
+// 状態変数
+let startTime;
 let currentQuestions = [];
 let currentIndex = 0;
 let correctCount = 0;
 let selectedMode = '';
+let activeDataset = [];
 
-// ページ読み込み時にタイマー開始と記録の表示
 window.onload = () => {
     startTime = Date.now();
-    updateStudyTimeLog();
-    // 定期的にローカルストレージに学習時間を保存
+    checkWeakWordCount();
+    renderChart();
     setInterval(saveStudyTime, 5000);
 };
 
-function saveStudyTime() {
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    localStorage.setItem('totalStudyTime', totalStudyTime + elapsed);
-    updateStudyTimeLog();
+// 苦手単語カウントと選択ボタンの動的制御
+function checkWeakWordCount() {
+    const weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
+    const select = document.getElementById('vocabulary-select');
+    const option = select.querySelector('option[value="WEAK_WORDS"]');
+    option.innerText = `苦手な単語 (${weakWords.length}語収録)`;
 }
 
-function updateStudyTimeLog() {
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const total = totalStudyTime + elapsed;
-    const mins = Math.floor(total / 60);
-    const secs = total % 60;
-    document.getElementById('study-time-log').innerText = `本日の学習時間: ${mins}分 ${secs}秒`;
+// 選択されたデータセットを取得する
+function getSelectedDataset() {
+    const type = document.getElementById('vocabulary-select').value;
+    if (type === 'WEAK_WORDS') {
+        return JSON.parse(localStorage.getItem('weakWords') || '[]');
+    }
+    
+    // words.js のデータをタイプ別にフィルタリング
+    // ※wordDataSet 配列の各オブジェクトに "type" 属性（'NGSL','NAWL','TSL','BSL'）があると仮定
+    // 属性がない場合はデフォルトで全てのデータを参照させる安全策をとる
+    const filtered = wordDataSet.filter(w => w.type === type);
+    return filtered.length > 0 ? filtered : wordDataSet;
+}
+
+// 学習時間のロギング
+function saveStudyTime() {
+    const now = Date.now();
+    const elapsed = Math.floor((now - startTime) / 1000);
+    if (elapsed <= 0) return;
+    
+    startTime = now; // ベースラインの更新
+    
+    const today = new Date().toISOString().split('T')[0];
+    let logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
+    logs[today] = (logs[today] || 0) + elapsed;
+    localStorage.setItem('studyLogs', JSON.stringify(logs));
+    
+    renderChart();
+}
+
+// 苦手単語の追加
+function addWeakWord(wordObj) {
+    let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
+    if (!weakWords.some(w => w.entry === wordObj.entry)) {
+        weakWords.push(wordObj);
+        localStorage.setItem('weakWords', JSON.stringify(weakWords));
+    }
+    checkWeakWordCount();
+}
+
+// 苦手単語の削除（正解したときにリストから除外する等）
+function removeWeakWord(wordObj) {
+    let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
+    weakWords = weakWords.filter(w => w.entry !== wordObj.entry);
+    localStorage.setItem('weakWords', JSON.stringify(weakWords));
+    checkWeakWordCount();
+}
+
+// 簡易グラフの生成
+function renderChart() {
+    const chartContainer = document.getElementById('history-chart');
+    chartContainer.innerHTML = '';
+    
+    const logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
+    
+    // 直近7日間の配列を生成
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().split('T')[0];
+        const displayDate = dateStr.substring(5); // MM-DD 形式
+        
+        const seconds = logs[dateStr] || 0;
+        
+        // 最大300秒(5分)を100%としたグラフ比率の計算
+        const maxScale = 300;
+        const percentage = Math.min((seconds / maxScale) * 100, 100);
+        
+        const row = document.createElement('div');
+        row.className = 'chart-row';
+        row.innerHTML = `
+            <div class="chart-label">${displayDate}</div>
+            <div class="chart-bar-wrapper">
+                <div class="chart-bar" style="width: ${percentage}%"></div>
+            </div>
+            <div class="chart-value">${seconds}秒</div>
+        `;
+        chartContainer.appendChild(row);
+    }
 }
 
 // クイズ開始
 function startQuiz() {
-    const count = parseInt(document.getElementById('question-count').value, 10);
-    selectedMode = document.getElementById('quiz-mode').value;
-    
-    if (!wordDataSet || wordDataSet.length === 0) {
-        alert("単語データが読み込まれていません。words.jsを確認してください。");
+    activeDataset = getSelectedDataset();
+    if (activeDataset.length === 0) {
+        alert("選択された単語帳にデータがありません。");
         return;
     }
 
-    // ランダムに単語を抽出
-    const shuffled = [...wordDataSet].sort(() => 0.5 - Math.random());
+    const countSetting = parseInt(document.getElementById('question-count').value, 10);
+    const count = Math.min(countSetting, activeDataset.length);
+    selectedMode = document.getElementById('quiz-mode').value;
+    
+    const shuffled = [...activeDataset].sort(() => 0.5 - Math.random());
     currentQuestions = shuffled.slice(0, count);
     
     currentIndex = 0;
@@ -54,7 +155,6 @@ function startQuiz() {
     showQuestion();
 }
 
-// 問題の表示
 function showQuestion() {
     const qData = currentQuestions[currentIndex];
     const total = currentQuestions.length;
@@ -62,27 +162,26 @@ function showQuestion() {
     document.getElementById('progress').innerText = `問題: ${currentIndex + 1} / ${total}`;
     document.getElementById('example-area').classList.add('hidden');
     
-    // UIコンテナを一度すべて隠す
     document.getElementById('options-container').classList.add('hidden');
     document.getElementById('card-container').classList.add('hidden');
     document.getElementById('input-container').classList.add('hidden');
     
-    const cardLog = document.getElementById('question-card');
+    const card = document.getElementById('question-card');
+    card.className = 'card'; // クラスの初期化
     
     if (selectedMode === '4choice-en-ja') {
-        cardLog.innerText = qData.entry;
+        card.innerText = qData.entry;
         setupFourChoices(qData, 'meaning_ja');
     } else if (selectedMode === '4choice-ja-en') {
-        cardLog.innerText = qData.meaning_ja;
+        card.innerText = qData.meaning_ja;
         setupFourChoices(qData, 'entry');
     } else if (selectedMode === 'card-know') {
-        cardLog.innerText = qData.entry;
+        card.innerText = qData.entry;
         document.getElementById('card-container').classList.remove('hidden');
     } else if (selectedMode === 'fill-blank') {
-        // 例文中のターゲット単語を「_______」に置換
         const regex = new RegExp(qData.entry, 'gi');
-        const blankedSentence = qData.example_sentence.replace(regex, '_______');
-        cardLog.innerText = blankedSentence;
+        const blanked = qData.example_sentence.replace(regex, '_______');
+        card.innerText = blanked;
         
         const exArea = document.getElementById('example-area');
         exArea.innerText = `和訳: ${qData.translated_sentence}`;
@@ -93,17 +192,23 @@ function showQuestion() {
     }
 }
 
-// 4択問題の選択肢を生成
 function setupFourChoices(correctData, key) {
     const container = document.getElementById('options-container');
     container.innerHTML = '';
     container.classList.remove('hidden');
     
-    // ダミー選択肢の取得
-    const dummies = wordDataSet
+    const dummies = activeDataset
         .filter(w => w.entry !== correctData.entry)
         .sort(() => 0.5 - Math.random())
         .slice(0, 3);
+        
+    // 選択肢が足りない場合は全体のデータセットから補充
+    while (dummies.length < 3) {
+        const fallback = wordDataSet[Math.floor(Math.random() * wordDataSet.length)];
+        if (fallback.entry !== correctData.entry && !dummies.some(d => d.entry === fallback.entry)) {
+            dummies.push(fallback);
+        }
+    }
         
     const choices = [correctData, ...dummies].sort(() => 0.5 - Math.random());
     
@@ -111,28 +216,39 @@ function setupFourChoices(correctData, key) {
         const btn = document.createElement('button');
         btn.className = 'option-btn';
         btn.innerText = choice[key];
-        btn.onclick = () => checkFourChoiceAnswer(choice.entry === correctData.entry, correctData);
+        btn.onclick = () => checkAnswer(choice.entry === correctData.entry);
         container.appendChild(btn);
     });
 }
 
-function checkFourChoiceAnswer(isCorrect, correctData) {
+// 判定・演出アニメーションの共通処理
+function checkAnswer(isCorrect) {
+    const card = document.getElementById('question-card');
+    const qData = currentQuestions[currentIndex];
+    
     if (isCorrect) {
-        alert("正解！");
+        playSound('correct');
+        card.classList.add('correct-flash');
         correctCount++;
+        // 苦手単語帳からの挑戦で正解した場合はリストから外す仕様（任意）
+        removeWeakWord(qData);
     } else {
-        alert(`不正解...\n正解は: ${correctData.entry} 【${correctData.meaning_ja}】`);
+        playSound('incorrect');
+        card.classList.add('incorrect-flash');
+        addWeakWord(qData); // 不正解なら自動的に苦手単語に保存
     }
-    nextQuestion();
+    
+    // アニメーション完了後に次へ
+    setTimeout(() => {
+        nextQuestion();
+    }, 500);
 }
 
-// 単語カードモードの処理
 function toggleCardFlip() {
     const card = document.getElementById('question-card');
     const qData = currentQuestions[currentIndex];
     if (card.innerText === qData.entry) {
         card.innerText = `${qData.entry}\n\n【意味】\n${qData.meaning_ja}`;
-        
         const exArea = document.getElementById('example-area');
         exArea.innerText = `例文: ${qData.example_sentence}\n訳: ${qData.translated_sentence}`;
         exArea.classList.remove('hidden');
@@ -143,35 +259,33 @@ function toggleCardFlip() {
 }
 
 function handleCardAnswer(knows) {
-    if (knows) correctCount++;
-    nextQuestion();
+    const qData = currentQuestions[currentIndex];
+    if (knows) {
+        playSound('correct');
+        correctCount++;
+        removeWeakWord(qData);
+        nextQuestion();
+    } else {
+        playSound('incorrect');
+        addWeakWord(qData);
+        nextQuestion();
+    }
 }
 
-// 例文穴埋めモードの処理
 function handleBlankAnswer() {
     const input = document.getElementById('blank-input').value.trim().toLowerCase();
     const correctAns = currentQuestions[currentIndex].entry.toLowerCase();
-    
-    if (input === correctAns) {
-        alert("正解！");
-        correctCount++;
-    } else {
-        alert(`不正解...\n正解は: ${correctAns}`);
-    }
-    nextQuestion();
+    checkAnswer(input === correctAns);
 }
 
-// 発音音声再生機能 (Web Speech APIを使用)
 function playVoice() {
     const qData = currentQuestions[currentIndex];
     if (!qData) return;
-    
     const utterance = new SpeechSynthesisUtterance(qData.entry);
-    utterance.lang = 'en-US'; // 米国英語
+    utterance.lang = 'en-US';
     window.speechSynthesis.speak(utterance);
 }
 
-// 次の問題に進むか結果画面を表示
 function nextQuestion() {
     currentIndex++;
     if (currentIndex < currentQuestions.length) {
@@ -184,7 +298,6 @@ function nextQuestion() {
 function showResult() {
     document.getElementById('quiz-screen').classList.add('hidden');
     document.getElementById('result-screen').classList.remove('hidden');
-    
     document.getElementById('score-text').innerText = 
         `${currentQuestions.length}問中 ${correctCount}問正解！\n正解率: ${Math.round((correctCount / currentQuestions.length) * 100)}%`;
 }
@@ -193,4 +306,13 @@ function returnToSetup() {
     document.getElementById('result-screen').classList.add('hidden');
     document.getElementById('setup-screen').classList.remove('hidden');
     saveStudyTime();
+}
+
+function clearLogs() {
+    if (confirm("学習記録と苦手単語データを完全に削除してよいか？")) {
+        localStorage.removeItem('studyLogs');
+        localStorage.removeItem('weakWords');
+        checkWeakWordCount();
+        renderChart();
+    }
 }
