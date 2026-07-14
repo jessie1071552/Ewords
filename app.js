@@ -56,9 +56,6 @@ function getSelectedDataset() {
         return JSON.parse(localStorage.getItem('weakWords') || '[]');
     }
     
-    // words.js のデータをタイプ別にフィルタリング
-    // ※wordDataSet 配列の各オブジェクトに "type" 属性（'NGSL','NAWL','TSL','BSL'）があると仮定
-    // 属性がない場合はデフォルトで全てのデータを参照させる安全策をとる
     const filtered = wordDataSet.filter(w => w.type === type);
     return filtered.length > 0 ? filtered : wordDataSet;
 }
@@ -69,7 +66,7 @@ function saveStudyTime() {
     const elapsed = Math.floor((now - startTime) / 1000);
     if (elapsed <= 0) return;
     
-    startTime = now; // ベースラインの更新
+    startTime = now; 
     
     const today = new Date().toISOString().split('T')[0];
     let logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
@@ -89,7 +86,7 @@ function addWeakWord(wordObj) {
     checkWeakWordCount();
 }
 
-// 苦手単語の削除（正解したときにリストから除外する等）
+// 苦手単語の削除
 function removeWeakWord(wordObj) {
     let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
     weakWords = weakWords.filter(w => w.entry !== wordObj.entry);
@@ -104,16 +101,14 @@ function renderChart() {
     
     const logs = JSON.parse(localStorage.getItem('studyLogs') || '{}');
     
-    // 直近7日間の配列を生成
     for (let i = 6; i >= 0; i--) {
         const d = new Date();
         d.setDate(d.getDate() - i);
         const dateStr = d.toISOString().split('T')[0];
-        const displayDate = dateStr.substring(5); // MM-DD 形式
+        const displayDate = dateStr.substring(5); 
         
         const seconds = logs[dateStr] || 0;
         
-        // 最大300秒(5分)を100%としたグラフ比率の計算
         const maxScale = 300;
         const percentage = Math.min((seconds / maxScale) * 100, 100);
         
@@ -167,7 +162,7 @@ function showQuestion() {
     document.getElementById('input-container').classList.add('hidden');
     
     const card = document.getElementById('question-card');
-    card.className = 'card'; // クラスの初期化
+    card.className = 'card'; 
     
     if (selectedMode === '4choice-en-ja') {
         card.innerText = qData.entry;
@@ -190,6 +185,11 @@ function showQuestion() {
         document.getElementById('blank-input').value = '';
         document.getElementById('input-container').classList.remove('hidden');
     }
+
+    // 【追加】「和 → 英」以外のモードの時、画面表示と同時に自動で発音を1回流す
+    if (selectedMode !== '4choice-ja-en') {
+        playVoice();
+    }
 }
 
 function setupFourChoices(correctData, key) {
@@ -202,7 +202,6 @@ function setupFourChoices(correctData, key) {
         .sort(() => 0.5 - Math.random())
         .slice(0, 3);
         
-    // 選択肢が足りない場合は全体のデータセットから補充
     while (dummies.length < 3) {
         const fallback = wordDataSet[Math.floor(Math.random() * wordDataSet.length)];
         if (fallback.entry !== correctData.entry && !dummies.some(d => d.entry === fallback.entry)) {
@@ -221,7 +220,6 @@ function setupFourChoices(correctData, key) {
     });
 }
 
-// 判定・演出アニメーションの共通処理
 function checkAnswer(isCorrect) {
     const card = document.getElementById('question-card');
     const qData = currentQuestions[currentIndex];
@@ -230,15 +228,13 @@ function checkAnswer(isCorrect) {
         playSound('correct');
         card.classList.add('correct-flash');
         correctCount++;
-        // 苦手単語帳からの挑戦で正解した場合はリストから外す仕様（任意）
         removeWeakWord(qData);
     } else {
         playSound('incorrect');
         card.classList.add('incorrect-flash');
-        addWeakWord(qData); // 不正解なら自動的に苦手単語に保存
+        addWeakWord(qData); 
     }
     
-    // アニメーション完了後に次へ
     setTimeout(() => {
         nextQuestion();
     }, 500);
