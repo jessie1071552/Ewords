@@ -59,6 +59,12 @@
         .chart-bar { background: var(--primary-color); height: 100%; width: 0%; transition: width 0.5s ease; }
         .chart-value { width: 60px; text-align: right; font-size: 13px; margin-left: 5px; }
         .progress-bar { background: var(--success-color); }
+
+        /* Gist設定セクション */
+        .gist-container { border: 2px dashed #ccc; padding: 15px; border-radius: 8px; margin-top: 20px; background: #fffcf4; }
+        .gist-container h4 { margin: 0 0 10px 0; color: var(--dark-color); }
+        .gist-input { padding: 10px; font-size: 14px; margin-bottom: 10px; }
+        .sync-status { font-size: 13px; font-weight: bold; margin-bottom: 10px; color: var(--gray-color); }
     </style>
 </head>
 <body>
@@ -120,6 +126,18 @@
             <h3>過去7日間の学習実績 (秒)</h3>
             <div id="history-chart"></div>
         </div>
+
+        <div class="gist-container">
+            <h4>☁️ GitHub Gist クラウド同期設定</h4>
+            <div id="gist-status" class="sync-status">ステータス: 未接続（ローカル保存中）</div>
+            <input type="text" id="gist-id-input" class="gist-input" placeholder="Gist ID を入力">
+            <input type="password" id="gist-token-input" class="gist-input" placeholder="GitHub トークン (ghp_...) を入力">
+            <div style="display: flex; gap: 10px;">
+                <button onclick="saveGistSettings()" style="background-color: var(--primary-color); padding: 10px; font-size: 14px;">連携してデータをロード</button>
+                <button onclick="syncLocalToGist()" style="background-color: var(--success-color); padding: 10px; font-size: 14px;">手動バックアップ</button>
+            </div>
+        </div>
+
         <button onclick="clearLogs()" style="background-color: #95a5a6; padding: 8px; font-size: 12px; margin-top: 15px;">記録と苦手単語を初期化</button>
     </div>
 
