@@ -49,14 +49,135 @@ let timerInterval = null;
 let timeLeft = 0;
 let limitSetting = 0;
 
-window.onload = () => {
+window.onload = async () => {
+    loadGistSettingsFromStorage();
+    await fetchGistData(); // 起動時にGistから最新の学習記録をロード
     checkWeakWordCount();
     renderChart();
     renderChapterProgress(); 
     setInterval(saveStudyTime, 2000);
 };
 
-// 苦手単語数および忘却曲線による要復習数のカウント
+// ==========================================
+// 【追加】GitHub Gist クラウド同期ロジック
+// ==========================================
+
+function loadGistSettingsFromStorage() {
+    const id = localStorage.getItem('gistId') || '';
+    const token = localStorage.getItem('gistToken') || '';
+    document.getElementById('gist-id-input').value = id;
+    document.getElementById('gist-token-input').value = token;
+}
+
+async function saveGistSettings() {
+    const id = document.getElementById('gist-id-input').value.trim();
+    const token = document.getElementById('gist-token-input').value.trim();
+    
+    if (!id || !token) {
+        alert("Gist ID と GitHubトークンを入力してほしい。");
+        return;
+    }
+    
+    localStorage.setItem('gistId', id);
+    localStorage.setItem('gistToken', token);
+    
+    updateGistStatus("連携確認中...", "var(--warning-color)");
+    
+    const success = await fetchGistData();
+    if (success) {
+        alert("Gistとの連携が正常に完了し、クラウドから学習データを読み込んだ！");
+        checkWeakWordCount();
+        renderChart();
+        renderChapterProgress();
+    } else {
+        alert("連携に失敗した。Gist ID やトークンの権限(gist)が正しいか確認してほしい。");
+    }
+}
+
+function updateGistStatus(text, color) {
+    const statusEl = document.getElementById('gist-status');
+    statusEl.innerText = `ステータス: ${text}`;
+    statusEl.style.color = color;
+}
+
+// Gistから学習データをダウンロードする
+async function fetchGistData() {
+    const id = localStorage.getItem('gistId');
+    const token = localStorage.getItem('gistToken');
+    if (!id || !token) {
+        updateGistStatus("未接続（ローカル保存中）", "var(--gray-color)");
+        return false;
+    }
+
+    try {
+        const response = await fetch(`https://api.github.com/gists/${id}`, {
+            headers: { 'Authorization': `token ${token}` }
+        });
+        
+        if (!response.ok) throw new Error("Gistデータの取得に失敗");
+        
+        const gist = await response.json();
+        const fileContent = gist.files['study_data.json'].content;
+        const data = JSON.parse(fileContent);
+        
+        // ローカルストレージをGistの最新データで上書き
+        localStorage.setItem('studyLogs', JSON.stringify(data.studyLogs || {}));
+        localStorage.setItem('weakWords', JSON.stringify(data.weakWords || []));
+        localStorage.setItem('wordHistory', JSON.stringify(data.wordHistory || {}));
+        localStorage.setItem('srData', JSON.stringify(data.srData || {}));
+        
+        updateGistStatus("クラウドと同期完了", "var(--success-color)");
+        return true;
+    } catch (e) {
+        console.error(e);
+        updateGistStatus("接続エラー（ローカル動作中）", "var(--error-color)");
+        return false;
+    }
+}
+
+// ローカルのデータをGistにアップロードする
+async function syncLocalToGist() {
+    const id = localStorage.getItem('gistId');
+    const token = localStorage.getItem('gistToken');
+    if (!id || !token) return;
+
+    updateGistStatus("同期中...", "var(--warning-color)");
+
+    const data = {
+        studyLogs: JSON.parse(localStorage.getItem('studyLogs') || '{}'),
+        weakWords: JSON.parse(localStorage.getItem('weakWords') || '[]'),
+        wordHistory: JSON.parse(localStorage.getItem('wordHistory') || '{}'),
+        srData: JSON.parse(localStorage.getItem('srData') || '{}')
+    };
+
+    try {
+        const response = await fetch(`https://api.github.com/gists/${id}`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `token ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                files: {
+                    'study_data.json': {
+                        content: JSON.stringify(data, null, 2)
+                    }
+                }
+            })
+        });
+
+        if (!response.ok) throw new Error("Gistへのアップロードに失敗");
+        updateGistStatus("クラウドと同期完了", "var(--success-color)");
+    } catch (e) {
+        console.error(e);
+        updateGistStatus("同期エラーが発生した", "var(--error-color)");
+    }
+}
+
+// ==========================================
+// 既存のトレーニングアプリ処理
+// ==========================================
+
 function checkWeakWordCount() {
     const weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
     const srData = JSON.parse(localStorage.getItem('srData') || '{}');
@@ -77,7 +198,6 @@ function checkWeakWordCount() {
     optionSR.innerText = `忘却曲線モード (今すぐ復習: ${reviewDueCount}語)`;
 }
 
-// 選択されたデータセットを取得する
 function getSelectedDataset() {
     const type = document.getElementById('vocabulary-select').value;
     if (type === 'WEAK_WORDS') {
@@ -99,7 +219,6 @@ function getSelectedDataset() {
     return filtered.length > 0 ? filtered : wordDataSet;
 }
 
-// クイズアクティブ時のみ学習時間を計測・保存
 function saveStudyTime() {
     if (!isQuizActive) return; 
     
@@ -115,9 +234,9 @@ function saveStudyTime() {
     localStorage.setItem('studyLogs', JSON.stringify(logs));
     
     renderChart();
+    syncLocalToGist(); // クラウドにサイレント保存
 }
 
-// 忘却曲線データのアップデート処理
 function updateSpacedRepetition(entry, isCorrect) {
     let srData = JSON.parse(localStorage.getItem('srData') || '{}');
     
@@ -137,7 +256,6 @@ function updateSpacedRepetition(entry, isCorrect) {
     localStorage.setItem('srData', JSON.stringify(srData));
 }
 
-// 苦手単語の追加
 function addWeakWord(wordObj) {
     let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
     if (!weakWords.some(w => w.entry === wordObj.entry)) {
@@ -151,9 +269,9 @@ function addWeakWord(wordObj) {
     
     updateSpacedRepetition(wordObj.entry, false);
     checkWeakWordCount();
+    syncLocalToGist(); // クラウドに自動保存
 }
 
-// 苦手単語の削除
 function removeWeakWord(wordObj) {
     let weakWords = JSON.parse(localStorage.getItem('weakWords') || '[]');
     weakWords = weakWords.filter(w => w.entry !== wordObj.entry);
@@ -165,9 +283,9 @@ function removeWeakWord(wordObj) {
     
     updateSpacedRepetition(wordObj.entry, true);
     checkWeakWordCount();
+    syncLocalToGist(); // クラウドに自動保存
 }
 
-// 各章の進捗状況のグラフ描画
 function renderChapterProgress() {
     const container = document.getElementById('progress-container');
     container.innerHTML = '';
@@ -194,7 +312,6 @@ function renderChapterProgress() {
     });
 }
 
-// 過去7日間の学習実績グラフ
 function renderChart() {
     const chartContainer = document.getElementById('history-chart');
     chartContainer.innerHTML = '';
@@ -223,7 +340,6 @@ function renderChart() {
     }
 }
 
-// クイズ開始
 function startQuiz() {
     activeDataset = getSelectedDataset();
     if (activeDataset.length === 0) {
@@ -263,7 +379,6 @@ function showQuestion() {
     document.getElementById('card-container').classList.add('hidden');
     document.getElementById('input-container').classList.add('hidden');
     
-    // アクションボタンの状態を有効に戻す
     document.getElementById('dont-know-btn').disabled = false;
 
     const card = document.getElementById('question-card');
@@ -300,7 +415,6 @@ function showQuestion() {
     initTimer();
 }
 
-// 制限時間タイマー
 function initTimer() {
     const timerContainer = document.getElementById('timer-container');
     if (limitSetting <= 0) {
@@ -329,9 +443,7 @@ function updateTimerUI() {
     document.getElementById('timer-bar').style.width = `${progressWidth}%`;
 }
 
-// 時間切れ時の処理
 function handleTimeOut() {
-    document.getElementById('dont-know-btn').disabled = true;
     playSound('incorrect');
     const card = document.getElementById('question-card');
     card.classList.add('incorrect-flash');
@@ -441,12 +553,10 @@ function checkAnswer(isCorrect) {
     }, 1000);
 }
 
-// 【追加】わからないボタン押下時の処理
 function handleDontKnow() {
     clearInterval(timerInterval);
     document.getElementById('dont-know-btn').disabled = true;
 
-    // 4択モード中であれば正解を強調表示する親切設計
     if (selectedMode === '4choice-en-ja' || selectedMode === '4choice-ja-en') {
         const container = document.getElementById('options-container');
         const buttons = container.querySelectorAll('.option-btn');
@@ -472,7 +582,6 @@ function handleDontKnow() {
     }, 1000);
 }
 
-// 【追加】クイズをやめる処理
 function handleQuitQuiz() {
     if (confirm("現在の進行状況を破棄して設定画面に戻るか？")) {
         clearInterval(timerInterval);
@@ -566,5 +675,6 @@ function clearLogs() {
         checkWeakWordCount();
         renderChart();
         renderChapterProgress();
+        syncLocalToGist(); // クラウド側のログも初期化して削除
     }
 }
